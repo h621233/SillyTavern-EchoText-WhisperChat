@@ -4,15 +4,24 @@
 (function () {
     'use strict';
 
-    const MODULE_NAME = 'EchoText';
-    const EXTENSION_NAME = 'EchoText';
+    // Namespaced so this fork never shares state with the original EchoText
+    // extension when both are installed at the same time. MODULE_NAME is the
+    // key under SillyTavern's extensionSettings, so a unique value gives each
+    // extension its own isolated configuration.
+    const MODULE_NAME = 'EchoTextWhisperChat';
+    const LEGACY_MODULE_NAME = 'EchoText';
+    const EXTENSION_NAME = 'EchoText-WhisperChat';
 
-    // Get BASE_URL and cache-buster from script tag
+    // Get BASE_URL and cache-buster from this fork's own script tag. Matching the
+    // full folder marker ('EchoText-WhisperChat') instead of just 'EchoText' is
+    // critical: when the original EchoText is also installed, a bare 'EchoText'
+    // match could resolve BASE_URL to the wrong folder and load the other
+    // extension's settings.html (which is why both drawers rendered identically).
     const scripts = document.querySelectorAll('script[src*="index.js"]');
     let BASE_URL = '';
     let VERSION_QUERY = '';
     for (const script of scripts) {
-        if (script.src.includes('EchoText')) {
+        if (script.src.includes('EchoText-WhisperChat')) {
             // Use URL API for resilient parsing
             try {
                 const urlObj = new URL(script.src, window.location.href);
@@ -28,7 +37,7 @@
         }
     }
     if (!BASE_URL) {
-        BASE_URL = '/scripts/extensions/third-party/SillyTavern-EchoText';
+        BASE_URL = '/scripts/extensions/third-party/SillyTavern-EchoText-WhisperChat';
     }
 
     console.log(`[EchoText] Initializing from ${BASE_URL} with query ${VERSION_QUERY}`);
@@ -378,7 +387,14 @@
     function getSettings() {
         const context = SillyTavern.getContext();
         if (!context.extensionSettings[MODULE_NAME]) {
-            context.extensionSettings[MODULE_NAME] = JSON.parse(JSON.stringify(defaultSettings));
+            // One-time migration: earlier versions of this fork stored config
+            // under the shared 'EchoText' key. If our namespaced key is empty but
+            // a legacy blob exists, seed from it (deep-copied so we never mutate
+            // the original extension's live settings), otherwise start fresh.
+            const legacy = context.extensionSettings[LEGACY_MODULE_NAME];
+            context.extensionSettings[MODULE_NAME] = legacy
+                ? JSON.parse(JSON.stringify(legacy))
+                : JSON.parse(JSON.stringify(defaultSettings));
         }
         const s = context.extensionSettings[MODULE_NAME];
         for (const key of Object.keys(defaultSettings)) {
@@ -5793,7 +5809,7 @@
 
         // Read persisted accordion state (default: open)
         let promptOpen = true;
-        try { promptOpen = localStorage.getItem('et_lightbox_prompt_open') !== 'false'; } catch (e) {}
+        try { promptOpen = localStorage.getItem('etwc_lightbox_prompt_open') !== 'false'; } catch (e) {}
 
         const safePrompt = String(promptText || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const safeTitle = titleText ? String(titleText).replace(/</g, '&lt;').replace(/>/g, '&gt;') : '';
@@ -5901,7 +5917,7 @@
             const isOpen = panel.hasClass('et-lightbox-prompt-open');
             panel.toggleClass('et-lightbox-prompt-open', !isOpen);
             lightbox.find('.et-lightbox-prompt-toggle').attr('title', isOpen ? 'Show prompt' : 'Hide prompt');
-            try { localStorage.setItem('et_lightbox_prompt_open', String(!isOpen)); } catch (e) {}
+            try { localStorage.setItem('etwc_lightbox_prompt_open', String(!isOpen)); } catch (e) {}
         });
 
         // ── Close helpers ─────────────────────────────────────────────────────
