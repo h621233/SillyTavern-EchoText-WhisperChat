@@ -114,8 +114,54 @@
     let _onGroupUpdated = null;
     let _onGroupMemberDrafted = null;
     let _onGroupWrapperFinished = null;
-    // Key for the SillyTavern extension prompt used by WhisperChat reverse injection.
+    // Keys for the SillyTavern extension prompts used by WhisperChat.
     const WHISPER_INJECT_KEY = 'echotext_whisper_reverse';
+    const WHISPER_SCENE_KEY = 'echotext_whisper_scene';
+    // Set true while a one-shot scene directive is injected, so we clear it (and
+    // consume it from settings) exactly once the group turn finishes.
+    let _sceneDirectiveArmed = false;
+
+    // ── WhisperChat i18n ─────────────────────────────────────────────────────
+    // Lightweight localisation for both the UI strings and the prompts injected
+    // into the model. Language follows SillyTavern's UI locale (localStorage
+    // 'language'), falling back to the browser language, then English. Add more
+    // locales by extending WHISPER_I18N; English is the default fallback.
+    const WHISPER_I18N = {
+        en: {
+            menuScene: 'Scene Direction',
+            sceneTitle: 'Next-Scene Direction',
+            sceneHint: "One director's instruction for the next group-chat round (e.g. skip to Saturday, everyone has dinner). One-shot — auto-cleared after one round. Tip: works best with a narrator/scene character (e.g. \"Scene\" or \"System\") in the group to lead the transition — trigger that character first.",
+            scenePlaceholder: 'e.g. Next scene jumps to Saturday, everyone is at dinner…',
+            sceneClear: 'Clear',
+            sceneApply: 'Apply · once',
+            groupCtx: 'Recent conversation from the group chat you belong to (you can sense this even in private chat):',
+            reverse: (name) => `[You (${name}) have had a private conversation with the user and remember it (the others do not know):`,
+            scene: 'DIRECTOR INSTRUCTION · OOC · HIGHEST PRIORITY · MUST FOLLOW:',
+        },
+        zh: {
+            menuScene: '下一幕指令',
+            sceneTitle: '下一幕指令 · Scene Direction',
+            sceneHint: '给下一轮群聊生成下达一条导演指令（如：跳到周六，大家聚餐，不要再写放学后）。一次性 — 生成一轮后自动清除。提示：群里最好有一个旁白/场景角色（如"场景""系统"）来主导转场，并让该角色先发言，效果最佳。',
+            scenePlaceholder: '例如：下一个场景跳到周六，大家在餐厅聚餐……',
+            sceneClear: '清除',
+            sceneApply: '应用 · 一次性',
+            groupCtx: '以下是你所在的群聊最近的对话（你在私信中也可以感知到这些）：',
+            reverse: (name) => `[你（${name}）和用户之间有过私下对话，你记得这些内容（其他人不知道）：`,
+            scene: '导演指令 · OOC · 最高优先级 · 必须遵守：',
+        },
+    };
+
+    function whisperLang() {
+        try {
+            const l = (localStorage.getItem('language') || navigator.language || 'en').toLowerCase();
+            return WHISPER_I18N[l] ? l : (l.startsWith('zh') ? 'zh' : 'en');
+        } catch (e) { return 'en'; }
+    }
+
+    function whisperT(key) {
+        const tbl = WHISPER_I18N[whisperLang()] || WHISPER_I18N.en;
+        return (tbl[key] != null) ? tbl[key] : (WHISPER_I18N.en[key] != null ? WHISPER_I18N.en[key] : key);
+    }
 
     // ============================================================
     // MOBILE / iOS DETECTION & VIEWPORT HELPERS
@@ -343,6 +389,9 @@
         }
         if (!s.chatHistory || typeof s.chatHistory !== 'object' || Array.isArray(s.chatHistory)) {
             s.chatHistory = {};
+        }
+        if (!s.sceneDirective || typeof s.sceneDirective !== 'object' || Array.isArray(s.sceneDirective)) {
+            s.sceneDirective = {};
         }
         if (!s.untetheredHistory || typeof s.untetheredHistory !== 'object' || Array.isArray(s.untetheredHistory)) {
             s.untetheredHistory = {};
@@ -1598,6 +1647,8 @@
             jQuery('#et-overflow-saveload, #et-overflow-char-divider, #et-overflow-clear').show();
             // Context override is Untethered-only — hide in combine/group modes
             jQuery('#et-overflow-context').hide();
+            jQuery('#et-overflow-scene').show();
+            updateSceneDirectiveBadge();
             const history = getChatHistory();
             renderMessages(history);
             return;
@@ -1630,6 +1681,9 @@
         const showCtx = hasChar && !isTetheredMode();
         jQuery('#et-overflow-context').toggle(showCtx);
         if (showCtx) updateContextOverrideBadge();
+        // Scene Direction is a group-only feature (drives the next scene transition)
+        jQuery('#et-overflow-scene').toggle(!!inGroup);
+        if (inGroup) updateSceneDirectiveBadge();
 
         const history = getChatHistory();
         renderMessages(history);
@@ -2233,7 +2287,7 @@
         if (tethered && settings.ctxGroupChat !== false) {
             const groupChat = await getSTGroupChatContext(settings.ctxGroupChatMaxMessages || 20);
             if (groupChat) {
-                prompt += '\n\n<group_chat_context>\n以下是你所在的群聊最近的对话（你在私信中也可以感知到这些）：\n' + groupChat + '\n</group_chat_context>';
+                prompt += '\n\n<group_chat_context>\n' + whisperT('groupCtx') + '\n' + groupChat + '\n</group_chat_context>';
             }
         }
 
@@ -4727,6 +4781,11 @@
                             <span>Context</span>
                             <span class="et-overflow-ctx-badge" id="et-overflow-ctx-badge" style="display:none"></span>
                         </div>
+                        <div class="et-overflow-menu-item" id="et-overflow-scene" style="display:none">
+                            <i class="fa-solid fa-clapperboard"></i>
+                            <span>${escapeHtml(whisperT('menuScene'))}</span>
+                            <span class="et-overflow-ctx-badge" id="et-overflow-scene-badge" style="display:none"></span>
+                        </div>
                         <div class="et-overflow-menu-item" id="et-overflow-gallery" style="display:none">
                             <i class="fa-regular fa-images"></i>
                             <span>Gallery</span>
@@ -4970,6 +5029,12 @@
             closeOverflowMenu();
             if (contextOverride) contextOverride.openModal();
             moveModalToPortal('#et-ctx-overlay');
+        });
+
+        jQuery('#et-overflow-scene').on('click', (e) => {
+            e.stopPropagation();
+            closeOverflowMenu();
+            openSceneDirectivePopup();
         });
 
         jQuery(document).on('click.et-overflow', function (e) {
@@ -5506,6 +5571,96 @@
     function updateEmotionIndicator() {
         if (emotionSystem) emotionSystem.updateEmotionIndicator();
         if (panelOpen && isTetheredMode()) updatePanelStatusRow();
+    }
+
+    // ── WhisperChat: Scene Direction ─────────────────────────────────────────
+    // A one-shot, OOC "stage direction" the user sets from the panel's overflow
+    // menu. On the next ST group-generation round it is injected (high recency,
+    // IN_CHAT depth 0) into EVERY drafted member via setExtensionPrompt under
+    // WHISPER_SCENE_KEY, then auto-cleared when the group turn finishes — so the
+    // narrator executes the scene change and the rest follow, exactly once.
+
+    function getSceneDirective(groupId) {
+        if (!groupId || !settings.sceneDirective) return '';
+        return settings.sceneDirective[groupId] || '';
+    }
+
+    function setSceneDirective(groupId, text) {
+        if (!groupId) return;
+        if (!settings.sceneDirective || typeof settings.sceneDirective !== 'object') settings.sceneDirective = {};
+        const t = (text || '').trim();
+        if (t) settings.sceneDirective[groupId] = t;
+        else delete settings.sceneDirective[groupId];
+        saveSettings();
+        updateSceneDirectiveBadge();
+    }
+
+    function updateSceneDirectiveBadge() {
+        const groupId = groupManager ? groupManager.getCurrentGroupId() : null;
+        const active = !!getSceneDirective(groupId);
+        jQuery('#et-overflow-scene-badge').toggle(active).text(active ? '●' : '');
+    }
+
+    function closeSceneDirectivePopup() {
+        jQuery('#et-scene-popup').remove();
+    }
+
+    function openSceneDirectivePopup() {
+        closeSceneDirectivePopup();
+
+        const groupId = groupManager ? groupManager.getCurrentGroupId() : null;
+        const current = getSceneDirective(groupId);
+        const t = whisperT;
+
+        // Appended INSIDE #et-panel (like the emotion / untethered popups) so it
+        // stacks above the panel and travels with it when dragged — rather than
+        // being clipped behind it in a separate portal stacking context.
+        const html = `
+        <div id="et-scene-popup" style="position:absolute; z-index:40; width:min(340px,calc(100% - 24px)); background:var(--et-bg,#1e1e22); color:var(--et-text,#eee); border:1px solid rgba(255,255,255,0.14); border-radius:14px; box-shadow:0 12px 40px rgba(0,0,0,0.55); padding:14px; box-sizing:border-box;">
+            <div style="display:flex; align-items:center; gap:8px; font-weight:600; margin-bottom:8px;">
+                <i class="fa-solid fa-clapperboard"></i><span style="flex:1;">${escapeHtml(t('sceneTitle'))}</span>
+                <i class="fa-solid fa-xmark" id="et-scene-close" style="cursor:pointer; opacity:0.7; padding:4px;"></i>
+            </div>
+            <div style="font-size:12px; opacity:0.7; line-height:1.4; margin-bottom:8px;">${escapeHtml(t('sceneHint'))}</div>
+            <textarea id="et-scene-input" rows="4" placeholder="${escapeHtml(t('scenePlaceholder'))}" style="width:100%; box-sizing:border-box; resize:vertical; border-radius:10px; border:1px solid rgba(255,255,255,0.15); background:rgba(0,0,0,0.25); color:inherit; padding:8px; font-family:inherit; font-size:13px;">${escapeHtml(current)}</textarea>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+                <button id="et-scene-clear" type="button" style="padding:6px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.15); background:transparent; color:inherit; cursor:pointer;">${escapeHtml(t('sceneClear'))}</button>
+                <button id="et-scene-apply" type="button" style="padding:6px 12px; border-radius:8px; border:none; background:var(--et-accent,#0a84ff); color:#fff; cursor:pointer;">${escapeHtml(t('sceneApply'))}</button>
+            </div>
+        </div>`;
+
+        jQuery('#et-panel').append(html);
+
+        // Center within the panel (panel-relative coordinates), reserving space for
+        // the header and message input bar — mirrors the untethered popup.
+        const panelEl = document.getElementById('et-panel');
+        const popup = jQuery('#et-scene-popup');
+        if (panelEl && popup.length) {
+            const rect = panelEl.getBoundingClientRect();
+            const ph = popup.outerHeight() || 240;
+            const pw = popup.outerWidth() || 320;
+            const headerH = 68, footerH = 60;
+            const usable = rect.height - headerH - footerH;
+            popup.css({
+                top: `${Math.max(headerH + 4, headerH + Math.round((usable - ph) / 2))}px`,
+                left: `${Math.max(8, Math.round((rect.width - pw) / 2))}px`
+            });
+        }
+
+        // Close only via ×, Apply or Clear — no click-outside, so dragging the
+        // panel (or clicking around while typing) never dismisses it.
+        jQuery('#et-scene-close').on('click', (e) => { e.stopPropagation(); closeSceneDirectivePopup(); });
+        jQuery('#et-scene-apply').on('click', (e) => {
+            e.stopPropagation();
+            setSceneDirective(groupId, jQuery('#et-scene-input').val());
+            closeSceneDirectivePopup();
+        });
+        jQuery('#et-scene-clear').on('click', (e) => {
+            e.stopPropagation();
+            setSceneDirective(groupId, '');
+            closeSceneDirectivePopup();
+        });
+        jQuery('#et-scene-popup').on('click', (e) => e.stopPropagation());
     }
 
     function toggleEmotionPopup(targetEl) {
@@ -7565,43 +7720,71 @@
         // leaks into solo chats or other characters.
         if (context.event_types.GROUP_MEMBER_DRAFTED) {
             _onGroupMemberDrafted = function(chId) {
+                const ctx = SillyTavern.getContext();
+                const character = ctx.characters && ctx.characters[chId];
+                // The group actually being generated in ST's main window.
+                const groupId = ctx.groupId != null ? String(ctx.groupId)
+                    : (groupManager ? groupManager.getCurrentGroupId() : null);
+
+                // ── Reverse injection: this member's private history (per-character) ──
                 try {
-                    const ctx = SillyTavern.getContext();
-                    const clear = () => ctx.setExtensionPrompt(WHISPER_INJECT_KEY, '');
-                    if (!settings.reverseInjection) return clear();
-
-                    const character = ctx.characters && ctx.characters[chId];
                     const charKey = character && (character.avatar || character.name);
-                    // Use the group actually being generated in ST's main window.
-                    const groupId = ctx.groupId != null ? String(ctx.groupId)
-                        : (groupManager ? groupManager.getCurrentGroupId() : null);
-                    if (!charKey || !groupId) return clear();
-
-                    const privateHistory = groupManager
+                    const privateHistory = (settings.reverseInjection && charKey && groupId && groupManager)
                         ? groupManager.getGroupChatHistory(groupId, charKey, false)
                         : null;
-                    if (!privateHistory || !privateHistory.length) return clear();
-
-                    const summary = formatPrivateHistoryForInjection(privateHistory.slice(-10));
-                    if (!summary) return clear();
-
-                    const charName = (character && character.name) || 'You';
-                    const text = `[你（${charName}）和用户之间有过私下对话，你记得这些内容（其他人不知道）：\n${summary}]`;
-                    // position 0 = IN_PROMPT (story/system region), depth 0, role defaults to SYSTEM.
-                    ctx.setExtensionPrompt(WHISPER_INJECT_KEY, text, 0, 0);
-                    log(`[WhisperChat] reverse-inject for ${charName}: ${privateHistory.slice(-10).length} private msgs`);
+                    const summary = (privateHistory && privateHistory.length)
+                        ? formatPrivateHistoryForInjection(privateHistory.slice(-10))
+                        : '';
+                    if (summary) {
+                        const charName = (character && character.name) || 'You';
+                        const text = `${whisperT('reverse')(charName)}\n${summary}]`;
+                        // position 0 = IN_PROMPT (story/system region), depth 0, role defaults to SYSTEM.
+                        ctx.setExtensionPrompt(WHISPER_INJECT_KEY, text, 0, 0);
+                        log(`[WhisperChat] reverse-inject for ${charName}: ${privateHistory.slice(-10).length} private msgs`);
+                    } else {
+                        ctx.setExtensionPrompt(WHISPER_INJECT_KEY, '');
+                    }
                 } catch (e) {
                     error('[WhisperChat] reverse injection failed:', e);
+                }
+
+                // ── Scene Direction: one-shot OOC stage direction for ALL members ──
+                try {
+                    const directive = getSceneDirective(groupId);
+                    if (directive) {
+                        const text = `[${whisperT('scene')}\n${directive}]`;
+                        // position 1 = IN_CHAT, depth 0 → injected at the very end (highest recency).
+                        ctx.setExtensionPrompt(WHISPER_SCENE_KEY, text, 1, 0);
+                        _sceneDirectiveArmed = true;
+                        log(`[WhisperChat] scene directive injected (group ${groupId})`);
+                    } else {
+                        ctx.setExtensionPrompt(WHISPER_SCENE_KEY, '');
+                    }
+                } catch (e) {
+                    error('[WhisperChat] scene directive injection failed:', e);
                 }
             };
             context.eventSource.on(context.event_types.GROUP_MEMBER_DRAFTED, _onGroupMemberDrafted);
         }
 
-        // Clear the reverse-injection extension prompt once the group turn ends so it
-        // does not leak into subsequent solo or non-group generations.
+        // Clear the WhisperChat extension prompts once the group turn ends so they
+        // do not leak into subsequent solo or non-group generations. The scene
+        // directive is one-shot: consume it from settings here so it fires for the
+        // whole round (every member) but only that one round.
         if (context.event_types.GROUP_WRAPPER_FINISHED) {
             _onGroupWrapperFinished = function() {
-                try { SillyTavern.getContext().setExtensionPrompt(WHISPER_INJECT_KEY, ''); } catch (e) { /* ignore */ }
+                try {
+                    const ctx = SillyTavern.getContext();
+                    ctx.setExtensionPrompt(WHISPER_INJECT_KEY, '');
+                    ctx.setExtensionPrompt(WHISPER_SCENE_KEY, '');
+                    if (_sceneDirectiveArmed) {
+                        _sceneDirectiveArmed = false;
+                        const groupId = ctx.groupId != null ? String(ctx.groupId)
+                            : (groupManager ? groupManager.getCurrentGroupId() : null);
+                        if (groupId) setSceneDirective(groupId, '');
+                        log('[WhisperChat] scene directive consumed (one-shot)');
+                    }
+                } catch (e) { /* ignore */ }
             };
             context.eventSource.on(context.event_types.GROUP_WRAPPER_FINISHED, _onGroupWrapperFinished);
         }
