@@ -6,7 +6,7 @@
 
 A [SillyTavern](https://github.com/SillyTavern/SillyTavern) extension that adds a floating, iMessage-style chat panel for private conversations with your characters. **This is the WhisperChat fork**, which connects those private DMs to your group roleplay in both directions, with strict per-character isolation.
 
-[![Version](https://img.shields.io/badge/version-1.4.0--whisper-blue.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-1.4.1--whisper-blue.svg)](manifest.json)
 [![SillyTavern](https://img.shields.io/badge/SillyTavern-Extension-orange.svg)](https://github.com/SillyTavern/SillyTavern)
 
 </div>
@@ -65,13 +65,25 @@ UI strings **and the prompts injected into the model** follow SillyTavern's UI l
 
 ## Installation
 
-Install via SillyTavern's extension installer using this repository URL, or clone into your extensions folder:
+> [!IMPORTANT]
+> **This fork replaces the original EchoText — do not run both at once.**
+> WhisperChat is a superset of EchoText (every original feature still works). If the original `SillyTavern-EchoText` is also installed, the two share the same on-screen panel and CSS and will visually conflict. **Uninstall the original first.**
+
+In SillyTavern: **Extensions → Install Extension**, then paste:
 
 ```
-.../SillyTavern/data/<user>/extensions/SillyTavern-EchoText/
+https://github.com/h621233/SillyTavern-EchoText-WhisperChat
+```
+
+Or clone into your extensions folder:
+
+```
+.../SillyTavern/data/<user>/extensions/SillyTavern-EchoText-WhisperChat/
 ```
 
 This is a **pure front-end JS extension — no build step**. After updating files, hard-refresh SillyTavern (Ctrl+Shift+R). `auto_update` is **disabled** in `manifest.json` so upstream updates won't overwrite the fork.
+
+This fork is fully namespaced (its own `extensionSettings` key and folder marker), so its configuration is isolated and it won't clobber the original's saved settings if both happen to be present.
 
 ---
 
