@@ -90,7 +90,7 @@ Console diagnostics (F12) are prefixed `[EchoText] [WhisperChat]` for each injec
 ## Credits
 
 - Original **EchoText** by [mattjaybe](https://github.com/mattjaybe/SillyTavern-EchoText) — MIT licensed.
-- WhisperChat fork additions by [h621233](https://github.com/h621233/SillyTavern-EchoText).
+- WhisperChat fork additions by [h621233](https://github.com/h621233/SillyTavern-EchoText-WhisperChat).
 
 ---
 
